@@ -151,10 +151,6 @@ contract AGGSmartEvents {
         return eventTypes.length;
     }
 
-    function isApproved() public view returns(bool){
-        return approvedAddresses[msg.sender];
-    }
-
     function signUp(uint eventTypeID, uint tokenID) payable lockUpEvent(lastEventID) public {
         require(eventTypeID >= 0 && eventTypeID < eventTypes.length, "No such eventType!");
 
