@@ -2,13 +2,8 @@
 pragma solidity ^0.8.7;
 
 interface IERC20 {
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-    function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
     function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
 
     function transferFrom(
         address from,
@@ -72,14 +67,26 @@ contract AGGSmartEvents {
     }
 
     modifier onlyDev() {
-        require(msg.sender == DevWallet, "Not Dev!");
+        require(msg.sender == DevWallet, "Not a Dev!");
+        _;
+    }
+
+    modifier onlyValidator(uint event_id, address senderAddress) {
+        require(senderAddress != address(0) && events[event_id].validator == senderAddress, "Not a validator!");
+        _;
+    }
+
+    modifier onlyContestants(uint event_id, uint tokenID, address senderAddress) {
+        require(senderAddress != address(0) && events[event_id].players[tokenID].playerAddress == senderAddress, "Not a contestant!");
         _;
     }
 
     modifier validAddress(address _addr) {
-        require(_addr != address(0), "Not valid address!");
+        require(_addr != address(0), "Not a valid address!");
         _;
     }
+
+
 
     modifier lockUP() {
         require(!locked, "No ReEnterancy!");
@@ -151,11 +158,15 @@ contract AGGSmartEvents {
         return eventTypes.length;
     }
 
-    function signUp(uint eventTypeID, uint tokenID) payable lockUpEvent(lastEventID) public {
+    function isApproved() public view returns(bool){
+        return approvedAddresses[msg.sender];
+    }
+
+    function signUp(uint eventTypeID, uint tokenID) external {
         require(eventTypeID >= 0 && eventTypeID < eventTypes.length, "No such eventType!");
 
         IERC20 paymentToken = IERC20(eventTypes[eventTypeID].paymentTokenAddress);
-        uint256 amountToPay = eventTypes[eventTypeID].paymentTokenAmount;
+        uint amountToPay = eventTypes[eventTypeID].paymentTokenAmount;
         
         if (paymentToken.allowance(msg.sender, address(this))  >= amountToPay) {
             approvedAddresses[msg.sender] = true;
@@ -181,7 +192,7 @@ contract AGGSmartEvents {
         }
 
         require(events[lastEventID].state == EventState.SignUp, "This event is not open for new signups! try again for a new one...");
-        require(events[lastEventID].players[tokenID].playerAddress != address(0), "This Gotchi is already registered in this event!");
+        require(events[lastEventID].players[tokenID].playerAddress == address(0), "This Gotchi is already registered in this event!");
 
         events[lastEventID].players[tokenID] = tmpPlayer;
         events[lastEventID].playersSize++;
