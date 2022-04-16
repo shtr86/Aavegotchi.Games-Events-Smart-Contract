@@ -20,6 +20,14 @@ contract AGGSmartEvents {
     bool locked;
     
     mapping(address => bool) approvedAddresses;
+    mapping(address => mapping(address => uint)) Balances;
+
+    event WithdrawBalance(address indexed by, address indexed tokenaddress, uint256 value);
+    event EventNewSignUP(uint indexed eventid, uint indexed tokenid, address indexed playeraddress);
+    event EventNewSignOut(uint indexed eventid, uint indexed tokenid, address indexed playeraddress);
+    event EventRewarded(uint indexed eventid, uint indexed tokenid, address indexed winneraddress, uint poisiton, uint amount, address tokenaddress);
+    event EventStateChanged(uint indexed eventid, EventState oldstate, EventState newstate);
+    event EventConfirmation(uint indexed eventid, address indexed by, bool IsConfirmed);
 
     enum EventState{
         SignUp, // event is in sigup state
