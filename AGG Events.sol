@@ -4,11 +4,9 @@ pragma solidity ^0.8.7;
 interface IERC20 {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    function totalSupply() external view returns (uint256);
+
     function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
     function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
 
     function transferFrom(
         address from,
@@ -71,15 +69,32 @@ contract AGGSmartEvents {
         uint AmountEachPos;
     }
 
+    uint internal lastEventID;
+
+    EventType[] internal eventTypes;
+    AGGEvent[] internal events;
+
     modifier onlyDev() {
-        require(msg.sender == DevWallet, "Not Dev!");
+        require(msg.sender == DevWallet, "Not a Dev!");
+        _;
+    }
+
+    modifier onlyValidator(uint event_id, address senderAddress) {
+        require(senderAddress != address(0) && events[event_id].validator == senderAddress, "Not a validator!");
+        _;
+    }
+
+    modifier onlyContestants(uint event_id, uint tokenID, address senderAddress) {
+        require(senderAddress != address(0) && events[event_id].players[tokenID].playerAddress == senderAddress, "Not a contestant!");
         _;
     }
 
     modifier validAddress(address _addr) {
-        require(_addr != address(0), "Not valid address!");
+        require(_addr != address(0), "Not a valid address!");
         _;
     }
+
+
 
     modifier lockUP() {
         require(!locked, "No ReEnterancy!");
@@ -89,11 +104,16 @@ contract AGGSmartEvents {
         locked = false;
     }
 
-    modifier lockUpEvent(uint eventID) {
-        require(!events[eventID].isBusy || events[eventID].state == EventState.Active, "Someone is signing up for that specific event at the same time! to prevent conflicts, We need you to try again later...");
-        events[eventID].isBusy = true;
-        _;
-        events[eventID].isBusy = false;
+    modifier lockUpEvent(uint eventTypeID) {
+        if (lastEventID < events.length && events[lastEventID].playersSize >= (eventTypes[eventTypeID].entrySize - 1)) {
+            require(!events[lastEventID].isBusy || events[lastEventID].state != EventState.SignUp, "Someone else is taking the last spot on that specific event! to prevent conflicts, We need you to try again...");
+            events[lastEventID].isBusy = true;
+            _;
+            events[lastEventID].isBusy = false;
+        } else {
+            _;
+        }
+        
     }
 
     function changeDev(address _newDevWallet) public onlyDev validAddress(_newDevWallet) {
@@ -104,10 +124,7 @@ contract AGGSmartEvents {
         DevWallet = payable(msg.sender);
     }
 
-    uint256 lastEventID;
 
-    EventType[] internal eventTypes;
-    AGGEvent[] internal events;
 
     function defineNewEventType(string memory title, address paymentTokenAddress, uint tokenAmount, uint durationHours, uint confirmationHours, uint entrySize, uint confimationSize, uint confrimationHighestPosition, uint[3][] memory RewardDistributionRules) onlyDev lockUP public {
         uint newIndex = eventTypes.length;
@@ -151,11 +168,15 @@ contract AGGSmartEvents {
         return eventTypes.length;
     }
 
-    function signUp(uint eventTypeID, uint tokenID) payable lockUpEvent(lastEventID) public {
+    function isApproved() public view returns(bool){
+        return approvedAddresses[msg.sender];
+    }
+
+    function signUp(uint eventTypeID, uint tokenID) lockUpEvent(eventTypeID) external {
         require(eventTypeID >= 0 && eventTypeID < eventTypes.length, "No such eventType!");
 
         IERC20 paymentToken = IERC20(eventTypes[eventTypeID].paymentTokenAddress);
-        uint256 amountToPay = eventTypes[eventTypeID].paymentTokenAmount;
+        uint amountToPay = eventTypes[eventTypeID].paymentTokenAmount;
         
         if (paymentToken.allowance(msg.sender, address(this))  >= amountToPay) {
             approvedAddresses[msg.sender] = true;
@@ -181,7 +202,7 @@ contract AGGSmartEvents {
         }
 
         require(events[lastEventID].state == EventState.SignUp, "This event is not open for new signups! try again for a new one...");
-        require(events[lastEventID].players[tokenID].playerAddress != address(0), "This Gotchi is already registered in this event!");
+        require(events[lastEventID].players[tokenID].playerAddress == address(0), "This Gotchi is already registered in this event!");
 
         events[lastEventID].players[tokenID] = tmpPlayer;
         events[lastEventID].playersSize++;
