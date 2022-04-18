@@ -57,7 +57,9 @@ contract AGGSmartEvents {
         address payable playerAddress;
         bool vote;
         bool voted;
+        bool rewarded;
         string optionalReason;
+
     }
 
     struct EventType {
@@ -78,6 +80,7 @@ contract AGGSmartEvents {
     struct AGGEvent { // AaveGotchi.Games Events structure
         mapping (uint => Player) playersByGotchiID; // GotchiID => Player
         mapping (uint => uint) GotchiIDByIndex; // Index => GotchiID
+        mapping (uint => Player) playersByFinalPosition; 
         uint playersSize;
         uint eventTypeID;
         EventState state;
@@ -212,6 +215,7 @@ contract AGGSmartEvents {
             require(eventPositions[i].length > 1, "eventPositions InCorrect!");
             require(events[eventID].playersByGotchiID[eventPositions[i][0]].playerAddress != address(0), "TokenID Not Exists in this event");
             events[eventID].playersByGotchiID[eventPositions[i][0]].position = eventPositions[i][1];
+            events[eventID].playersByFinalPosition[eventPositions[i][1]] = events[eventID].playersByGotchiID[eventPositions[i][0]];
         }
     }
 
@@ -295,11 +299,15 @@ contract AGGSmartEvents {
         require(eventTypes[events[eventID].eventTypeID].needConfrimation, "Confirmation not necessary!");
 
         bool confirmed;
+
+        Player memory tmpPlayer;
         for (uint i=0; i<events[eventID].playersSize; i++) {
-            if (events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[i]].playerAddress == msg.sender) {
-                events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[i]].vote = vote;
-                events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[i]].voted = true;
-                events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[i]].optionalReason = optionalReason;
+            tmpPlayer = getEventPlayerByIndex(eventID, i);
+            if (tmpPlayer.playerAddress == msg.sender) {
+                tmpPlayer.vote = vote;
+                tmpPlayer.voted = true;
+                tmpPlayer.optionalReason = optionalReason;
+                events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[i]] = tmpPlayer;
                 confirmed = true;
             }
         }
@@ -319,31 +327,126 @@ contract AGGSmartEvents {
         emit EventValidated(eventID, msg.sender, vote);
 
         if (!eventTypes[events[eventID].eventTypeID].needConfrimation) {
-            rewardPlayers(eventID);
-            emit EventStateChanged(eventID, events[eventID].state, EventState.Withdrawable);
-        } else {
-            if (confirmationScore(eventID) > 0) {
+            if (vote) {
                 rewardPlayers(eventID);
                 emit EventStateChanged(eventID, events[eventID].state, EventState.Withdrawable);
             } else {
                 revertEvent(eventID);
                 emit EventStateChanged(eventID, events[eventID].state, EventState.Reverted);
             }
+        } else {
+            uint confirmScore = confirmationScore(eventID);
+            if (confirmScore > 0) {
+                if (vote) {
+                    rewardPlayers(eventID);
+                    emit EventStateChanged(eventID, events[eventID].state, EventState.Withdrawable);
+                } else {
+                    revertEvent(eventID);
+                    emit EventStateChanged(eventID, events[eventID].state, EventState.Reverted);
+                }
+            } else if (confirmScore < 0)  {
+                revertEvent(eventID);
+                emit EventStateChanged(eventID, events[eventID].state, EventState.Reverted);
+            } else { // if (confirmScore == 0)
+                if (vote) {
+                    rewardPlayers(eventID);
+                    emit EventStateChanged(eventID, events[eventID].state, EventState.Withdrawable);
+                } else {
+                    revertEvent(eventID);
+                    emit EventStateChanged(eventID, events[eventID].state, EventState.Reverted);
+                }
+            }
         }
     }
 
     function confirmationScore(uint eventID) checkEvent(eventID) public view returns(uint) {
+        require(events[eventID].playersSize > 0, "No Players in this event yet");
+        uint winnersCount;
+        uint losersCount;
+        uint lastWinnerPos;
 
+        DistributionRule memory dist;
+        for (uint i=0; i<eventTypes[events[eventID].eventTypeID].DistributionRulesCount; i++) {
+           dist = getEventDistRuleByIndex(eventID, i);
+           winnersCount += dist.toPos - dist.fromPos + 1;
+           
+           if (lastWinnerPos < dist.toPos)
+                lastWinnerPos = dist.toPos;
+        }
+
+        losersCount = events[eventID].playersSize - losersCount;
+
+        if (losersCount == 0) {
+            uint allScores = events[eventID].playersSize;
+            
+            Player memory tmpPlayer;
+            for (uint i=0; i<events[eventID].playersSize; i++) {
+            tmpPlayer = getEventPlayerByIndex(eventID, i);    
+                if (!tmpPlayer.voted) {
+                    allScores -= 1;
+                } else if (!tmpPlayer.vote) {
+                    allScores -= 1;
+                }
+            }
+
+            return (allScores * 100) / events[eventID].playersSize;
+        } else {
+            uint winnersScore = winnersCount*losersCount;
+            uint losersScore = winnersCount*losersCount;
+
+            Player memory tmpPlayer;
+            for (uint i=0; i<events[eventID].playersSize; i++) {
+                tmpPlayer = getEventPlayerByIndex(eventID, i);
+                if (tmpPlayer.position <= lastWinnerPos) { // winners vote
+                    if (!tmpPlayer.voted) {
+                        winnersScore -= losersCount;
+                    } else if (!tmpPlayer.vote) {
+                        winnersScore -= losersCount;
+                    }
+                } else {  // losers vote
+                    if (!tmpPlayer.voted) {
+                        losersScore -= winnersCount;
+                    } else if (!tmpPlayer.vote) {
+                        losersScore -= winnersCount;
+                    }
+                }
+            }
+
+            return ((winnersScore + losersScore) * 100) / (winnersCount*losersCount*2);
+        }
     }
 
-    function rewardPlayers(uint eventID) internal {
+    function rewardPlayers(uint eventID) lockUP checkEvent(eventID) validSender onlyValidator(eventID) public {
+        DistributionRule memory dist;
+        for (uint i=0; i<eventTypes[events[eventID].eventTypeID].DistributionRulesCount; i++) {
+           dist = getEventDistRuleByIndex(eventID, i);
 
+            for (uint c=dist.fromPos; c<=dist.toPos; c++) {
+                if (!events[eventID].playersByFinalPosition[c].rewarded) {
+                    Balances[events[eventID].playersByFinalPosition[c].playerAddress][tokens[eventTypes[events[eventID].eventTypeID].paymentTokenID].tokenAddress] += dist.AmountEachPos;
+                    events[eventID].playersByFinalPosition[c].rewarded = true;
+                }
+            }
+        }
     }
 
-    function revertEvent(uint eventID) internal {
-
+    function revertEvent(uint eventID) lockUP checkEvent(eventID) validSender onlyValidator(eventID) public {
+        Player memory tmpPlayer;
+        for (uint i=0; i<events[eventID].playersSize; i++) {
+            tmpPlayer = getEventPlayerByIndex(eventID, i);
+            if (!tmpPlayer.rewarded) {
+                Balances[tmpPlayer.playerAddress][tokens[eventTypes[events[eventID].eventTypeID].paymentTokenID].tokenAddress] += eventTypes[events[eventID].eventTypeID].paymentTokenAmount;
+                tmpPlayer.rewarded = true;
+            }
+        }
     }
 
+    function getEventPlayerByIndex(uint eventID, uint index) internal view returns (Player memory) {
+        return events[eventID].playersByGotchiID[events[eventID].GotchiIDByIndex[index]];
+    }
+    function getEventDistRuleByIndex(uint eventID, uint index) internal view returns (DistributionRule memory) {
+        return eventTypes[events[eventID].eventTypeID].DistributionRules[index];
+    }
     function balanceOfTokenID(uint tokenID) checkToken(tokenID) public view returns(uint) {
         return Balances[msg.sender][tokens[tokenID].tokenAddress];
     }
